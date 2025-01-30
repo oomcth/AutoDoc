@@ -7,6 +7,7 @@ import torch
 from typing import List, Dict, Optional, Tuple
 import subprocess
 import os
+from accelerate import Accelerator
 import sys
 if os.name == 'nt':
     import msvcrt
@@ -14,6 +15,7 @@ else:
     import termios
     import tty
 import os
+from device_config import device
 
 
 token = "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"
@@ -77,11 +79,8 @@ class PatientInfo:
     antecedents: List[str] = None
     allergies: List[str] = None
     medicaments: List[str] = None
-
-    def is_complete(self) -> bool:
-        """Vérifie si toutes les informations essentielles sont présentes"""
-        required_fields = [self.nom, self.prenom, self.sexe]
-        return all(required_fields)
+    motif: List[str] = None
+    autre: List[str] = None
 
 
 class PatientInfoExtractor:
@@ -93,9 +92,12 @@ class PatientInfoExtractor:
             self.model_name,
             torch_dtype=torch.float16,
             low_cpu_mem_usage=True,
-            device_map="mps",
+            device_map=device,
             use_auth_token=token
         )
+        accelerator = Accelerator()
+        self.model = accelerator.prepare(self.model)
+        # self.model.to(device)
 
     def _generate_text(self, prompt: str, max_length: int = 500) -> str:
         try:
@@ -119,13 +121,22 @@ class PatientInfoExtractor:
         Texte: {text}
 
         Format de réponse:
-        Nom: [nom du patient]
-        Prénom: [prénom du patient]
-        Date de naissance: [date]
-        Sexe: [M/F]
-        Antécédents: [liste des antécédents]
-        Allergies: [liste des allergies]
-        Médicaments: [liste des médicaments]
+        Nom: nom du patient
+        Prénom: prénom du patient
+        Date de naissance: date
+        Sexe: M/F
+        Antécédents: liste des antécédents
+        Allergies: liste des allergies
+        Médicaments: liste des médicaments
+        Motif: Motif de consultation
+        Autres: Toutes les autres informations qui semble inutiles ou que tu as mal compris
+
+        Si une information est manquante mettre aucun par exemple Allergies: aucun.
+        Au niveau du format de réponse ne pas mettre dans un format particulier comme json. Juste écrire du texte comme précisé plus haut.
+        Attention, le nom et le prénom ne peuvent pas être la même chose.
+        N'invente pas nom plus des choses que tu ne connais pas.
+        Ne justifie pas ta réponse tu donne juste le format de réponse demandé sans rien d'autre
+        Ta réponse :
         """
 
         response = self._generate_text(prompt)
@@ -161,14 +172,20 @@ class PatientInfoExtractor:
             "sexe": None,
             "antecedents": [],
             "allergies": [],
-            "medicaments": []
+            "medicaments": [],
+            "motif": [],
+            "autre": [],
         }
 
         lines = response.split('\n')
-
+        still_reading_input = True
         for line in lines:
             line = line.strip()
-            if line.startswith("Nom:"):
+            if line.startswith("Ta"):
+                still_reading_input = False
+            if still_reading_input:
+                pass
+            elif line.startswith("Nom:"):
                 info["nom"] = line.replace("Nom:", "").strip()
             elif line.startswith("Prénom:"):
                 info["prenom"] = line.replace("Prénom:", "").strip()
@@ -190,6 +207,14 @@ class PatientInfoExtractor:
                 medicaments = line.replace("Médicaments:", "").strip()
                 if medicaments and medicaments.lower() != "aucun":
                     info["medicaments"] = [m.strip() for m in medicaments.split(',')]
+            elif line.startswith("Motif:"):
+                motif = line.replace("Motif:", "").strip()
+                if motif and motif.lower() != "aucun":
+                    info["motif"] = [m.strip() for m in motif.split(',')]
+            elif line.startswith("Autres:"):
+                autre = line.replace("Autres:", "").strip()
+                if autre and autre.lower() != "aucun":
+                    info["autre"] = [m.strip() for m in autre.split(',')]
 
         return PatientInfo(**info)
 
@@ -198,6 +223,7 @@ class AudioTranscriber:
     """Gestion de la transcription audio"""
     def __init__(self):
         self.model = whisper.load_model("base")
+        # self.model.to(device)
 
     def transcribe(self, audio_path: str) -> str:
         try:
@@ -220,7 +246,6 @@ class MedicalTranscriptionSystem:
         # Transcription
         logger.info("Début de la transcription...")
         transcript = self.transcriber.transcribe(audio_path)
-        print(transcript)
         logger.info("Transcription terminée")
 
         # Extraction des informations patient
@@ -249,8 +274,11 @@ class MedicalTranscriptionSystem:
 
         CONSULTATION
         -----------
-        Motif de consultation:
+        Motif de consultation: {', '.join(patient.motif) if patient.motif else "Aucun"}
 
+
+        AUTRE INFORMATION:
+        {', '.join(patient.autre) if patient.autre else "Aucun"}
         """
         return template
 
@@ -260,7 +288,7 @@ system = MedicalTranscriptionSystem()
 
 
 # Traitement d'une consultation
-record_audio()
+# record_audio()
 patient_info, missing_info = system.process_consultation("output.wav")
 
 # Si des informations sont manquantes
