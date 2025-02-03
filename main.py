@@ -4,10 +4,12 @@ from dataclasses import dataclass
 import logging
 from datetime import datetime
 import torch
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Type
 import subprocess
 import os
 from accelerate import Accelerator
+from dataclasses import dataclass, fields, is_dataclass
+import inspect
 import sys
 if os.name == 'nt':
     import msvcrt
@@ -72,15 +74,30 @@ def record_audio():
 @dataclass
 class PatientInfo:
     """Structure de données pour les informations patient"""
-    nom: str
-    prenom: str
-    date_naissance: Optional[str] = None
-    sexe: Optional[str] = None
-    antecedents: List[str] = None
-    allergies: List[str] = None
-    medicaments: List[str] = None
-    motif: List[str] = None
-    autre: List[str] = None
+    nom_complet: Optional[str] = None
+    consommation_tabac: Optional[str] = None
+    consommation_alcool: Optional[str] = None
+    antecedents_medicaux: Optional[str] = None
+    allergies: Optional[str] = None
+    intolerances_medicamenteuses: Optional[str] = None
+    antecedents_chirurgicaux: Optional[str] = None
+    antecedents_familiaux: Optional[str] = None
+    antecedents_personnels_cancereux: Optional[str] = None
+    antecedents_familiaux_cancereux: Optional[str] = None
+    age_premiere_regle: Optional[str] = None
+    nombre_enfants: Optional[str] = None
+    nombre_grossesses: Optional[str] = None
+    allaitement: Optional[str] = None
+    date_menopause: Optional[str] = None
+    traitement_hormonal_substitutif: Optional[str] = None
+    taille_soutien_gorge: Optional[str] = None
+    histoire_maladie_actuelle: Optional[str] = None
+    poids_actuel: Optional[str] = None
+    poids_habituel: Optional[str] = None
+    taille: Optional[str] = None
+    surface_corporelle: Optional[str] = None
+    autres_notes: Optional[str] = None
+    autre_infos: Optional[str] = None
 
 
 class PatientInfoExtractor:
@@ -99,7 +116,7 @@ class PatientInfoExtractor:
         self.model = accelerator.prepare(self.model)
         # self.model.to(device)
 
-    def _generate_text(self, prompt: str, max_length: int = 500) -> str:
+    def _generate_text(self, prompt: str, max_length: int = 1000) -> str:
         try:
             inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
             outputs = self.model.generate(
@@ -115,31 +132,44 @@ class PatientInfoExtractor:
             raise
 
     def extract_patient_info(self, text: str) -> Tuple[PatientInfo, List[str]]:
-        """Extrait les informations patient et génère des questions si nécessaire"""
-        prompt = f"""
-        Extrayez les informations suivantes du texte de la consultation:
-        Texte: {text}
-
-        Format de réponse:
-        Nom: nom du patient
-        Prénom: prénom du patient
-        Date de naissance: date
-        Sexe: M/F
-        Antécédents: liste des antécédents
-        Allergies: liste des allergies
-        Médicaments: liste des médicaments
-        Motif: Motif de consultation
-        Autres: Toutes les autres informations qui semble inutiles ou que tu as mal compris
-
-        Si une information est manquante mettre aucun par exemple Allergies: aucun.
-        Au niveau du format de réponse ne pas mettre dans un format particulier comme json. Juste écrire du texte comme précisé plus haut.
-        Attention, le nom et le prénom ne peuvent pas être la même chose.
-        N'invente pas nom plus des choses que tu ne connais pas.
-        Ne justifie pas ta réponse tu donne juste le format de réponse demandé sans rien d'autre
-        Ta réponse :
         """
+        Génère automatiquement un prompt basé sur la structure de la classe
 
-        response = self._generate_text(prompt)
+        :param text: Texte de consultation à analyser
+        :return: Prompt généré dynamiquement
+        """
+        # Générer des descriptions par défaut basées sur le nom du champ
+        descriptions_champs = {
+            field.name: ' '.join(
+                mot.capitalize() for mot in 
+                field.name.replace('_', ' ').split()
+            ) for field in fields(PatientInfo())
+        }
+
+        # Construction du prompt
+        prompt_sections = [
+            "Extrayez les informations médicales suivantes du texte de consultation :",
+            f"Texte: {text}",
+            "\nInstructions :",
+            "- Soyez précis et factuel",
+            "- N'inventez pas d'informations",
+            "- Si une information est manquante, indiquez 'aucun'",
+            "\nFormat de réponse :"
+        ]
+
+        # Ajout dynamique des champs
+        for champ, description in descriptions_champs.items():
+            prompt_sections.append(f"{description}: Description du champ")
+
+        prompt_sections.extend([
+            "\nRègles supplémentaires :",
+            "- Utilisez un format de texte clair et lisible",
+            "- Ne pas utiliser de format JSON ou structuré",
+            "- Soyez concis mais informatif",
+            "\nVotre réponse :"
+        ])
+        print("\n".join(prompt_sections))
+        response = self._generate_text("\n".join(prompt_sections))
         print("---" * 10)
         print("llm output : ", response)
         print("---" * 10)
@@ -147,76 +177,61 @@ class PatientInfoExtractor:
         print("obtained info : ", info)
 
         # Génération des questions pour les informations manquantes
-        missing_info = []
-        if not info.nom or not info.prenom:
-            missing_info.append("Quel est votre nom complet ?")
-        if not info.date_naissance:
-            missing_info.append("Quelle est votre date de naissance ?")
-        if not info.sexe:
-            missing_info.append("Quel est votre sexe ?")
-        if not info.antecedents:
-            missing_info.append("Avez-vous des antécédents médicaux ?")
-        if not info.allergies:
-            missing_info.append("Avez-vous des allergies ?")
-        if not info.medicaments:
-            missing_info.append("Prenez-vous des médicaments actuellement ?")
-
+        missing_info = self.generer_questions_manquantes(info)
         return info, missing_info
 
-    def _parse_patient_info(self, response: str) -> PatientInfo:
+    def _parse_patient_info(self, reponse: str) -> PatientInfo:
         """Parse la réponse du modèle pour extraire les informations structurées"""
-        info = {
-            "nom": "",
-            "prenom": "",
-            "date_naissance": None,
-            "sexe": None,
-            "antecedents": [],
-            "allergies": [],
-            "medicaments": [],
-            "motif": [],
-            "autre": [],
-        }
+        reponse = reponse.split("Votre réponse :")[1].strip()
+        informations_extraites = {}
 
-        lines = response.split('\n')
-        still_reading_input = True
-        for line in lines:
-            line = line.strip()
-            if line.startswith("Ta"):
-                still_reading_input = False
-            if still_reading_input:
-                pass
-            elif line.startswith("Nom:"):
-                info["nom"] = line.replace("Nom:", "").strip()
-            elif line.startswith("Prénom:"):
-                info["prenom"] = line.replace("Prénom:", "").strip()
-            elif line.startswith("Date de naissance:"):
-                info["date_naissance"] = line.replace("Date de naissance:", "").strip()
-            elif line.startswith("Sexe:"):
-                sexe = line.replace("Sexe:", "").strip()
-                if sexe.upper() in ['M', 'F']:
-                    info["sexe"] = sexe.upper()
-            elif line.startswith("Antécédents:"):
-                antecedents = line.replace("Antécédents:", "").strip()
-                if antecedents and antecedents.lower() != "aucun":
-                    info["antecedents"] = [a.strip() for a in antecedents.split(',')]
-            elif line.startswith("Allergies:"):
-                allergies = line.replace("Allergies:", "").strip()
-                if allergies and allergies.lower() != "aucune":
-                    info["allergies"] = [a.strip() for a in allergies.split(',')]
-            elif line.startswith("Médicaments:"):
-                medicaments = line.replace("Médicaments:", "").strip()
-                if medicaments and medicaments.lower() != "aucun":
-                    info["medicaments"] = [m.strip() for m in medicaments.split(',')]
-            elif line.startswith("Motif:"):
-                motif = line.replace("Motif:", "").strip()
-                if motif and motif.lower() != "aucun":
-                    info["motif"] = [m.strip() for m in motif.split(',')]
-            elif line.startswith("Autres:"):
-                autre = line.replace("Autres:", "").strip()
-                if autre and autre.lower() != "aucun":
-                    info["autre"] = [m.strip() for m in autre.split(',')]
+        for champ in fields(PatientInfo()):
+            # Chercher une ligne commençant par le nom du champ
+            ligne_correspondante = None
+            for ligne in reponse.split('\n'):
+                if ligne.strip().lower().startswith(champ.name.replace('_', ' ').lower() + ':'):
+                    ligne_correspondante = ligne.split(':', 1)[1].strip()
+                    break
 
-        return PatientInfo(**info)
+            # Traitement de la valeur extraite
+            if ligne_correspondante and ligne_correspondante.lower() not in ['', 'aucun', 'aucune']:
+                # Gestion des types
+                if champ.type == List[str]:
+                    # Pour les listes, séparer par des virgules
+                    informations_extraites[champ.name] = [
+                        item.strip() for item in ligne_correspondante.split(',')
+                        if item.strip()
+                    ]
+                else:
+                    informations_extraites[champ.name] = ligne_correspondante
+
+        return PatientInfo(**informations_extraites)
+
+    def generer_questions_manquantes(self, infos: PatientInfo) -> List[str]:
+        """
+        Génère des questions pour les informations manquantes
+
+        :param infos: Instance de dataclass avec les informations patient
+        :return: Liste de questions pour les informations manquantes
+        """
+        questions_manquantes = []
+
+        for champ in fields(infos):
+            valeur = getattr(infos, champ.name)
+
+            # Vérifier si la valeur est vide ou None
+            if (valeur is None or
+               (isinstance(valeur, list) and len(valeur) == 0) or
+               (isinstance(valeur, str) and valeur.strip() == 'aucun')):
+
+                # Formater le nom du champ pour la question
+                nom_champ = ' '.join(mot.capitalize() for mot in champ.name.split('_'))
+
+                # Générer une question contextuelle
+                question = f"Pouvez-vous me donner plus d'informations sur {nom_champ.lower()} ?"
+                questions_manquantes.append(question)
+
+        return questions_manquantes
 
 
 class AudioTranscriber:
@@ -255,32 +270,47 @@ class MedicalTranscriptionSystem:
 
         return patient_info, missing_patient_info
 
-    def generate_final_document(self, patient: PatientInfo) -> str:
-        """Génération du document final avec informations patient"""
-        template = f"""
-        RÉSUMÉ DE CONSULTATION
-        ---------------------
-
-        INFORMATIONS PATIENT
-        -------------------
-        Nom: {patient.nom}
-        Prénom: {patient.prenom}
-        Date de naissance: {patient.date_naissance or "Non renseignée"}
-        Sexe: {patient.sexe or "Non renseigné"}
-
-        Antécédents: {', '.join(patient.antecedents) if patient.antecedents else "Aucun"}
-        Allergies: {', '.join(patient.allergies) if patient.allergies else "Aucune"}
-        Médicaments: {', '.join(patient.medicaments) if patient.medicaments else "Aucun"}
-
-        CONSULTATION
-        -----------
-        Motif de consultation: {', '.join(patient.motif) if patient.motif else "Aucun"}
-
-
-        AUTRE INFORMATION:
-        {', '.join(patient.autre) if patient.autre else "Aucun"}
+    def generer_document_final(self, patient: PatientInfo) -> str:
         """
-        return template
+        Génère un document final dynamique basé sur la structure du dataclass
+
+        :param patient: Instance d'un dataclass avec les informations patient
+        :return: Document final formatté
+        """
+        # Vérifier que c'est bien un dataclass
+        if not is_dataclass(patient):
+            raise ValueError("L'objet doit être un dataclass")
+
+        # Sections du document
+        sections = ["RÉSUMÉ DE CONSULTATION", ""]
+
+        # Informations patient
+        sections.append("INFORMATIONS PATIENT")
+        sections.append("-" * 20)
+
+        # Parcourir dynamiquement tous les champs
+        for champ in fields(patient):
+            valeur = getattr(patient, champ.name)
+
+            # Formatage personnalisé selon le type de champ
+            if valeur is None:
+                libelle_valeur = f"Non renseigné(e)"
+            elif isinstance(valeur, list):
+                libelle_valeur = ', '.join(valeur) if valeur else "Aucun(e)"
+            else:
+                libelle_valeur = str(valeur)
+
+            # Formater le nom du champ
+            libelle_champ = ' '.join(mot.capitalize() for mot in champ.name.split('_'))
+
+            sections.append(f"{libelle_champ}: {libelle_valeur}")
+
+        # Ajouter une section générique pour toute information supplémentaire
+        sections.append("\nAUTRES INFORMATIONS")
+        sections.append("-" * 20)
+        sections.append("Aucune information supplémentaire")
+
+        return "\n".join(sections)
 
 
 # Création du système
@@ -288,9 +318,8 @@ system = MedicalTranscriptionSystem()
 
 
 # Traitement d'une consultation
-# record_audio()
+record_audio()
 patient_info, missing_info = system.process_consultation("output.wav")
-
 # Si des informations sont manquantes
 if missing_info:
     print("Questions à poser au patient:")
@@ -298,6 +327,6 @@ if missing_info:
         print(f"- {question}")
 
 # Document de sortie
-document = system.generate_final_document(patient_info)
+document = system.generer_document_final(patient_info)
 print(document)
 print(patient_info)
