@@ -97,7 +97,6 @@ class PatientInfo:
     taille: Optional[str] = None
     surface_corporelle: Optional[str] = None
     autres_notes: Optional[str] = None
-    autre_infos: Optional[str] = None
 
 
 class PatientInfoExtractor:
@@ -153,7 +152,7 @@ class PatientInfoExtractor:
             "\nInstructions :",
             "- Soyez précis et factuel",
             "- N'inventez pas d'informations",
-            "- Si une information est manquante, indiquez 'aucun'",
+            "- Si une information est manquante, indiquez 'None'",
             "\nFormat de réponse :"
         ]
 
@@ -166,6 +165,7 @@ class PatientInfoExtractor:
             "- Utilisez un format de texte clair et lisible",
             "- Ne pas utiliser de format JSON ou structuré",
             "- Soyez concis mais informatif",
+            "Ne mets pas de mise en page sur le texte, donc pas de **text** ou de json ou quoi que ce soit. Tu mets que du texte brute sans mise en page et style",
             "\nVotre réponse :"
         ])
         print("\n".join(prompt_sections))
@@ -194,7 +194,7 @@ class PatientInfoExtractor:
                     break
 
             # Traitement de la valeur extraite
-            if ligne_correspondante and ligne_correspondante.lower() not in ['', 'aucun', 'aucune']:
+            if ligne_correspondante and ligne_correspondante.lower() not in ['', 'None']:
                 # Gestion des types
                 if champ.type == List[str]:
                     # Pour les listes, séparer par des virgules
@@ -222,7 +222,7 @@ class PatientInfoExtractor:
             # Vérifier si la valeur est vide ou None
             if (valeur is None or
                (isinstance(valeur, list) and len(valeur) == 0) or
-               (isinstance(valeur, str) and valeur.strip() == 'aucun')):
+               (isinstance(valeur, str) and valeur.strip() == 'None')):
 
                 # Formater le nom du champ pour la question
                 nom_champ = ' '.join(mot.capitalize() for mot in champ.name.split('_'))
@@ -237,7 +237,8 @@ class PatientInfoExtractor:
 class AudioTranscriber:
     """Gestion de la transcription audio"""
     def __init__(self):
-        self.model = whisper.load_model("base")
+        # self.model = whisper.load_model("base")
+        self.model = whisper.load_model("large-v3")
         # self.model.to(device)
 
     def transcribe(self, audio_path: str) -> str:
@@ -294,9 +295,9 @@ class MedicalTranscriptionSystem:
 
             # Formatage personnalisé selon le type de champ
             if valeur is None:
-                libelle_valeur = f"Non renseigné(e)"
+                libelle_valeur = "Non renseigné"
             elif isinstance(valeur, list):
-                libelle_valeur = ', '.join(valeur) if valeur else "Aucun(e)"
+                libelle_valeur = ', '.join(valeur) if valeur else "None"
             else:
                 libelle_valeur = str(valeur)
 
@@ -318,7 +319,7 @@ system = MedicalTranscriptionSystem()
 
 
 # Traitement d'une consultation
-record_audio()
+# record_audio()
 patient_info, missing_info = system.process_consultation("output.wav")
 # Si des informations sont manquantes
 if missing_info:
