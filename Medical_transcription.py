@@ -113,6 +113,7 @@ class PatientInfoExtractor:
         )
         accelerator = Accelerator()
         self.model = accelerator.prepare(self.model)
+        self.data = None
         # self.model.to(device)
 
     def _generate_text(self, prompt: str, max_length: int = 1000) -> str:
@@ -153,8 +154,13 @@ class PatientInfoExtractor:
             "- Soyez précis et factuel",
             "- N'inventez pas d'informations",
             "- Si une information est manquante, indiquez 'None'",
-            "\nFormat de réponse :"
         ]
+
+        if self.data:
+            prompt_sections.append("Voici des informations collectés lors de précédentes consulations a merge avec les données de la nouvelle consultation")
+            prompt_sections.append(str(self.data))
+
+        prompt_sections.append(["\nFormat de réponse :"])
 
         # Ajout dynamique des champs
         for champ, description in descriptions_champs.items():
@@ -174,6 +180,7 @@ class PatientInfoExtractor:
         print("llm output : ", response)
         print("---" * 10)
         info = self._parse_patient_info(response)
+        self.data = info
         print("obtained info : ", info)
 
         # Génération des questions pour les informations manquantes
